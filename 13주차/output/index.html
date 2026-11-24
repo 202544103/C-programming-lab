@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GPS 경로 시각화</title>
+
+  <!-- Leaflet CSS (API 키 불필요) -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+      background-color: #f4f6f9;
+      color: #222;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      background-color: #1e293b;
+      color: #ffffff;
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    #status {
+      font-size: 0.9rem;
+      color: #cbd5e1;
+    }
+
+    #map {
+      flex: 1;
+      width: 100%;
+    }
+
+    .legend {
+      background: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    .legend span {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>GPS 이동 경로 시각화 (output.json)</h1>
+    <div id="status">데이터 불러오는 중...</div>
+  </header>
+
+  <div id="map"></div>
+
+  <!-- Leaflet JS (API 키 불필요) -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script>
+    const statusEl = document.getElementById("status");
+
+    // 지도 초기화 (기본 중심 좌표: 데이터 첫 지점 기준)
+    const map = L.map("map").setView([42.3634, -71.098465], 16);
+
+    // OpenStreetMap 타일 레이어 추가
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    // 범례 추가
+    const legend = L.control({ position: "bottomright" });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create("div", "legend");
+      div.innerHTML = `
+        <div><span style="background:#16a34a;"></span>출발점 (Start)</div>
+        <div><span style="background:#2563eb;"></span>경유 지점 (Waypoint)</div>
+        <div><span style="background:#dc2626;"></span>도착점 (End)</div>
+      `;
+      return div;
+    };
+    legend.addTo(map);
+
+    // output.json 불러오기
+    fetch("./output.json")
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP 오류: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (!Array.isArray(data) || data.length === 0) {
+          statusEl.textContent = "표시할 GPS 데이터가 없습니다.";
+          return;
+        }
+
+        const latLngs = [];
+
+        data.forEach((point, index) => {
+          const lat = Number(point.latitude);
+          // JSON 원본 키 철자('longtitude')에 맞춰 읽음
+          const lng = Number(point.longtitude);
+          const info = point.info ?? "정보 없음";
+
+          if (Number.isNaN(lat) || Number.isNaN(lng)) {
+            console.warn(`잘못된 좌표 건너뜀 (index ${index}):`, point);
+            return;
+          }
+
+          const coord = [lat, lng];
+          latLngs.push(coord);
+
+          // 시작점 / 경유점 / 도착점 색상 구분
+          let markerColor = "#2563eb";
+          let label = `지점 #${index + 1}`;
+          if (index === 0) {
+            markerColor = "#16a34a";
+            label = `출발점 (#${index + 1})`;
+          } else if (index === data.length - 1) {
+            markerColor = "#dc2626";
+            label = `도착점 (#${index + 1})`;
+          }
+
+          const marker = L.circleMarker(coord, {
+            radius: 7,
+            fillColor: markerColor,
+            color: "#ffffff",
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.9
+          }).addTo(map);
+
+          marker.bindPopup(`
+            <strong>${label}</strong><br />
+            ${info}<br />
+            위도: ${lat.toFixed(6)}<br />
+            경도: ${lng.toFixed(6)}
+          `);
+        });
+
+        if (latLngs.length === 0) {
+          statusEl.textContent = "유효한 좌표가 없습니다.";
+          return;
+        }
+
+        // 이동 경로 폴리라인 그리기
+        const polyline = L.polyline(latLngs, {
+          color: "#0f172a",
+          weight: 4,
+          opacity: 0.8
+        }).addTo(map);
+
+        // 전체 경로가 화면에 보이도록 지도 범위 조정
+        map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
+
+        statusEl.textContent = `총 ${latLngs.length}개 포인트 로드 완료`;
+      })
+      .catch((err) => {
+        console.error(err);
+        statusEl.textContent = `불러오기 실패: ${err.message}`;
+      });
+  </script>
+</body>
+</html>
